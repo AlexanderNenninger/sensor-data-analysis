@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import IO, Any, Callable, Iterator, TypeVar
-from webbrowser import get
 from zipfile import ZipFile, ZipInfo
 
 import polars as pl
@@ -17,11 +16,13 @@ Location = IO[bytes] | Path
 FilePredicateT = Callable[[FileInfoT, ContextT], bool]
 
 # reading files
-DataReaderT = Callable[[Location, ContextT], DataItemT]
+DataReaderT = Callable[[Location, ContextT], Iterator[DataItemT]]
 
 
 def scan_zip_dataset(
-    zip_location: Location, data_reader: DataReaderT, file_predicate: FilePredicateT
+    zip_location: Location,
+    data_reader: DataReaderT[DataItemT],
+    file_predicate: FilePredicateT,
 ) -> Iterator[DataItemT]:
     # Open the zip file
     with ZipFile(zip_location, "r") as zip_ref:
@@ -57,7 +58,9 @@ def csv_file_predicate(f, context) -> bool:
 
 
 def scan_container(
-    location: Location, data_reader: DataReaderT, file_predicate: FilePredicateT
+    location: Location,
+    data_reader: DataReaderT[DataItemT],
+    file_predicate: FilePredicateT,
 ) -> Iterator[DataItemT]:
     # Iterate through all files in the directory
     assert isinstance(location, Path), "Location must be a Path object"
@@ -69,17 +72,17 @@ def scan_container(
                 yield from data_reader(file_handle, local_context)
 
 
-def zip_file_predicate(f: FileInfoT, context: ContextT) -> bool:
+def zip_file_predicate(f, context) -> bool:
     return (get_name(f) or "").endswith(".zip")
 
 
-def zip_scanner(location, context):
+def zip_scanner(location, context) -> Iterator[pl.LazyFrame]:
     yield from scan_zip_dataset(
         location, data_reader=csv_scanner, file_predicate=csv_file_predicate
     )
 
 
-def scan_dataset(location: Location) -> Iterator[DataItemT]:
+def scan_dataset(location: Location, context: ContextT = {}) -> Iterator[pl.LazyFrame]:
     yield from scan_container(
         location,
         data_reader=zip_scanner,
