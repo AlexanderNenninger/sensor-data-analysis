@@ -38,7 +38,6 @@ def scan_zip_dataset(
 def scan_csv_file(location: Location, context: ContextT) -> Iterator[pl.LazyFrame]:
     sensor = location.name
     sensor = sensor.rstrip(".csv") if sensor else None
-    print(f"Scanning CSV file: {location}")
     yield pl.scan_csv(location).with_columns(
         pl.lit(sensor).alias("sensor"),
         pl.lit(context["root"].name).alias("measurement"),
@@ -69,7 +68,6 @@ def is_zip_file(location: Location, context: ContextT) -> bool:
 
 
 def zip_scanner(location: Location, context: ContextT) -> Iterator[pl.LazyFrame]:
-    print(f"Scanning ZIP file: {location}")
     yield from scan_zip_dataset(
         location, data_reader=scan_csv_file, file_predicate=is_csv_file
     )
