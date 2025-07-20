@@ -2,18 +2,17 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import IO, Any, Callable, Iterator, TypeVar
-from zipfile import ZipFile, ZipInfo
+from zipfile import ZipFile
 
 import polars as pl
 
 # 'primitive' types we might abstract later.
 ContextT = dict[str, Any]
-FileInfoT = ZipInfo | IO | Path
 DataItemT = TypeVar("DataItemT", covariant=True)
 Location = IO[bytes] | Path
 
 # filtering files
-FilePredicateT = Callable[[FileInfoT, ContextT], bool]
+FilePredicateT = Callable[[Location, ContextT], bool]
 
 # reading files
 DataReaderT = Callable[[Location, ContextT], Iterator[DataItemT]]
@@ -24,40 +23,33 @@ def scan_zip_dataset(
     data_reader: DataReaderT[DataItemT],
     file_predicate: FilePredicateT,
 ) -> Iterator[DataItemT]:
-    # Open the zip file
     with ZipFile(zip_location, "r") as zip_ref:
-        context = {"root": zip_location, "file": zip_ref.filename}
+        context: ContextT = {"root": zip_location, "file": zip_ref.filename}
         # Find files that match the predicate
-        data_files = (f for f in zip_ref.filelist if file_predicate(f, context))
-        for file_info in data_files:
+        for file_info in zip_ref.filelist:
             # Open each file and read its data
             with zip_ref.open(file_info) as file_handle:
-                local_context = {"file_info": file_info, **context}
+                if not file_predicate(file_handle, context):
+                    continue
+                local_context: ContextT = {"file_info": file_info, **context}
                 yield from data_reader(file_handle, local_context)
 
 
-DefaultT = TypeVar("DefaultT")
-
-
-def get_name(finfo: FileInfoT, default: DefaultT = None) -> str | DefaultT:
-    return getattr(finfo, "filename", getattr(finfo, "name", default))
-
-
-def csv_scanner(location: Location, context) -> Iterator[pl.LazyFrame]:
-    sensor = get_name(context.get("file_info"))
+def scan_csv_file(location: Location, context: ContextT) -> Iterator[pl.LazyFrame]:
+    sensor = location.name
     sensor = sensor.rstrip(".csv") if sensor else None
+    print(f"Scanning CSV file: {location}")
     yield pl.scan_csv(location).with_columns(
         pl.lit(sensor).alias("sensor"),
-        pl.lit(get_name(context["root"])).alias("measurement"),
+        pl.lit(context["root"].name).alias("measurement"),
     )
 
 
-def csv_file_predicate(f, context) -> bool:
-    name = get_name(f, "")
-    return name.endswith(".csv") and ("meta" not in name)
+def is_csv_file(location: Location, context: ContextT) -> bool:
+    return location.name.endswith(".csv") and ("meta" not in location.name)
 
 
-def scan_container(
+def scan_directory(
     location: Location,
     data_reader: DataReaderT[DataItemT],
     file_predicate: FilePredicateT,
@@ -72,21 +64,22 @@ def scan_container(
                 yield from data_reader(file_handle, local_context)
 
 
-def zip_file_predicate(f, context) -> bool:
-    return (get_name(f) or "").endswith(".zip")
+def is_zip_file(location: Location, context: ContextT) -> bool:
+    return location.name.endswith(".zip")
 
 
-def zip_scanner(location, context) -> Iterator[pl.LazyFrame]:
+def zip_scanner(location: Location, context: ContextT) -> Iterator[pl.LazyFrame]:
+    print(f"Scanning ZIP file: {location}")
     yield from scan_zip_dataset(
-        location, data_reader=csv_scanner, file_predicate=csv_file_predicate
+        location, data_reader=scan_csv_file, file_predicate=is_csv_file
     )
 
 
-def scan_dataset(location: Location, context: ContextT = {}) -> Iterator[pl.LazyFrame]:
-    yield from scan_container(
+def scan_dataset(location: Location, context: ContextT) -> Iterator[pl.LazyFrame]:
+    yield from scan_directory(
         location,
         data_reader=zip_scanner,
-        file_predicate=zip_file_predicate,
+        file_predicate=is_zip_file,
     )
 
 
@@ -95,9 +88,9 @@ if __name__ == "__main__":
     index_columns = ["measurement", "sensor"]
     data = (
         (
-            pl.concat(scan_dataset(container_path), how="diagonal", rechunk=True).sort(
-                "measurement", "Time (s)"
-            )
+            pl.concat(
+                scan_dataset(container_path, {}), how="diagonal", rechunk=True
+            ).sort("measurement", "Time (s)")
         )
         .group_by_dynamic(
             index_column=(pl.col("Time (s)") * 1e6).cast(pl.Datetime("us")),
