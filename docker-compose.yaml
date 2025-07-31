@@ -1,0 +1,28 @@
+version: '3.8'
+services:
+  ray-head:
+    build: .
+    image: sensor-data-analysis:latest
+    command: ["ray", "start", "--head", "--port=6379", "--dashboard-host=0.0.0.0"]
+    ports:
+      - "8265:8265"  # Ray dashboard
+      - "6379:6379"  # Ray head port
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - ray-net
+  ray-worker:
+    build: .
+    image: sensor-data-analysis:latest
+    command: ["ray", "start", "--address=ray-head:6379"]
+    depends_on:
+      - ray-head
+    environment:
+      - PYTHONUNBUFFERED=1
+    networks:
+      - ray-net
+    deploy:
+      replicas: 2
+networks:
+  ray-net:
+    driver: bridge

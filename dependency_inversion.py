@@ -5,6 +5,7 @@ from typing import IO, Any, Callable, Iterator, TypeVar
 from zipfile import ZipFile
 
 import polars as pl
+import ray
 
 # 'primitive' types we might abstract later.
 ContextT = dict[str, Any]
@@ -81,14 +82,34 @@ def scan_dataset(location: Location, context: ContextT) -> Iterator[pl.LazyFrame
     )
 
 
+# Ray remote wrapper for distributed scan
+@ray.remote
+def ray_scan_dataset(location: str, context: dict) -> list:
+    # location must be str for Ray serialization
+    from pathlib import Path
+
+    results = list(scan_dataset(Path(location), context))
+    return results
+
+
 if __name__ == "__main__":
+    ray.init()
     container_path = Path("./data")
     index_columns = ["measurement", "sensor"]
+
+    # Distribute zip file processing across cluster
+    zip_files = [str(p) for p in container_path.rglob("*.zip")]
+    # Launch Ray tasks for each zip file
+    futures = [ray_scan_dataset.remote(zip_file, {}) for zip_file in zip_files]
+    results = ray.get(futures)
+    # Flatten results
+    lazy_frames = [frame for sublist in results for frame in sublist]
+
     data = (
         (
-            pl.concat(
-                scan_dataset(container_path, {}), how="diagonal", rechunk=True
-            ).sort("measurement", "Time (s)")
+            pl.concat(lazy_frames, how="diagonal", rechunk=True).sort(
+                "measurement", "Time (s)"
+            )
         )
         .group_by_dynamic(
             index_column=(pl.col("Time (s)") * 1e6).cast(pl.Datetime("us")),
