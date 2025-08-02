@@ -1,6 +1,6 @@
 # Dependency Inversion Pattern for IMU Data Processing
 
-A flexible framework for processing IMU sensor data from ZIP archives using the dependency inversion principle.
+A flexible framework for processing data using the dependency inversion and functional programming principles.
 
 ## Features
 
