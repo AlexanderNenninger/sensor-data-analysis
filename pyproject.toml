@@ -5,10 +5,18 @@ description = "Add your description here"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
+    "cloudpathlib>=0.21.1",
     "matplotlib>=3.10.5",
     "polars>=1.31.0",
+    "pytest>=8.4.1",
     "ray>=2.48.0",
 ]
 
 [tool.pyright]
 typeCheckingMode = "strict"
+exclude = []
+
+# Make pyright less strict in the tests directory
+[[tool.pyright.overrides]]
+include = ["tests"]
+typeCheckingMode = "basic"
