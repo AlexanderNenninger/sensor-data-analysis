@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import IO, Callable, Iterator, TypeVar, Any
+from typing import IO, Callable, Iterator, TypeVar, Any, cast
 from zipfile import ZipFile
 from itertools import islice
 
@@ -50,12 +50,12 @@ def scan_directory_ray(
     worker_cfg: dict[str, Any] = {},
 ) -> Iterator[DataItemT]:
     # Iterate through all files in the directory
-    assert isinstance(location, Path), "Location must be a Path object"
+    assert isinstance(location, SendableLocation), "Location must be a SendableLocation"
     timeout = worker_cfg.pop("timeout", None)
     ignore_errors = worker_cfg.pop("ignore_errors", False)
     num_items = worker_cfg.pop("num_items", None)
     file_paths = islice(
-        (file_path for file_path in location.glob("**/*") if file_predicate(file_path)),
+        (file_path for file_path in location.glob("**/*") if file_predicate(file_path)),  # type: ignore
         num_items,
     )
 
@@ -76,14 +76,15 @@ def scan_directory_ray(
 
 
 def scan_directory_local(
-    location: Location,
+    location: SendableLocation,
     data_reader: DataReaderT[DataItemT],
     file_predicate: FilePredicateT,
 ) -> Iterator[DataItemT]:
     # Iterate through all files in the directory
-    assert isinstance(location, Path), "Location must be a Path object"
-    file_paths = (
-        file_path for file_path in location.glob("**/*") if file_predicate(file_path)
+    file_paths: Iterator[SendableLocation] = (
+        file_path
+        for file_path in cast(Any, location).glob("**/*")
+        if file_predicate(file_path)
     )
 
     for file_path in file_paths:

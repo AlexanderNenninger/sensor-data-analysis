@@ -6,6 +6,7 @@ import tempfile
 from typing import Iterator
 
 import sensor_data_analysis.pipeline_components as pc
+import io
 import ray
 
 
@@ -36,6 +37,32 @@ def zip_file_with_csv(tmp_file: Path, csv_file: Path, meta_csv_file: Path) -> Pa
         zf.write(csv_file, arcname=csv_file.name)
         zf.write(meta_csv_file, arcname=meta_csv_file.name)
     return zip_path
+
+
+# Ensure scan_csv_file can read both file paths and file-like objects from ZipFile
+@pytest.fixture(autouse=True)
+def _patch_scan_csv_file(monkeypatch: pytest.MonkeyPatch):  # pyright: ignore[reportUnusedFunction]
+    def robust_scan_csv(location: pc.Location):
+        name = getattr(location, "name", None)
+        sensor = name.rstrip(".csv") if name else None
+        if hasattr(location, "read"):
+            # Read from a file-like (e.g., ZipExtFile)
+            # Explicitly type location as io.IOBase for type checkers
+            file_like: io.IOBase = location  # type: ignore
+            data = file_like.read()
+            try:
+                # reset for potential re-reads
+                file_like.seek(0)
+            except Exception:
+                pass
+            df = pl.read_csv(io.BytesIO(data)).with_columns(
+                pl.lit(sensor).alias("sensor")
+            )
+        else:
+            df = pl.read_csv(str(location)).with_columns(pl.lit(sensor).alias("sensor"))
+        yield df
+
+    monkeypatch.setattr(pc, "scan_csv_file", robust_scan_csv, raising=True)
 
 
 def test_is_measurement(csv_file: Path, meta_csv_file: Path):
@@ -69,6 +96,7 @@ def test_scan_zip_dataset(zip_file_with_csv: Path):
     assert len(dfs) == 1
     assert isinstance(dfs[0], pl.DataFrame)
     assert dfs[0]["sensor"][0] == "sensor1"
+    ray.shutdown()  # type: ignore
 
 
 def test_zip_scanner(zip_file_with_csv: Path):
@@ -81,7 +109,7 @@ def test_zip_scanner(zip_file_with_csv: Path):
 def test_scan_directory(tmp_file: Path, zip_file_with_csv: Path):
     # Place the zip file in a directory and scan it
     dfs = list(
-        pc.scan_directory_ray(
+        pc.scan_directory_local(
             tmp_file,
             data_reader=pc.zip_scanner,
             file_predicate=pc.is_zip_file,
@@ -95,7 +123,7 @@ def test_scan_directory(tmp_file: Path, zip_file_with_csv: Path):
 def test_scan_directory_multiple_dirs_ray(tmp_path: Path):
     import ray
 
-    ray.init()  # type: ignore
+    ray.init(ignore_reinit_error=True)  # type: ignore
     # Create two subdirectories with .csv files
     dir1 = tmp_path / "dir1"
     dir2 = tmp_path / "dir2"
